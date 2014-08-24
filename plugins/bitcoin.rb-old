@@ -1,0 +1,41 @@
+require "net/http"
+require "json"
+
+puts "TODO: The BitcoinPlugin is crappy. Tell James to rewrite it."
+
+module BitcoinPlugin
+  class Plugin < PluginBase
+    init_v2 :bitcoin
+   
+    meta :name => "Bitcoin Plugin",
+         :author => "Jamie W.",
+         :version => 0.1,
+         :description => "A plugin that shows the in/deflation of BTC"
+    
+    cmd:bitcoin, "Get some information about the price of BTC"
+    
+    def self.get_price
+      result = Net::HTTP.get(URI.parse('http://data.mtgox.com/api/2/BTCUSD/money/ticker'))
+      JSON.parse(result)["data"]["last"]["value"].to_f
+    end
+    
+    @@old = self.get_price.round(2)
+    @@time = Time.new
+    
+    def self.cmd_bitcoin
+      new_price = self.get_price.round(2)
+      new_time = Time.new
+      
+      percentage_difference = ((new_price - @@old) / (@@old / 100)).round(2)
+      interval = (new_time - @@time).time_s
+      
+      updown = percentage_difference > 0 ? "UP" : "DOWN"
+      notify "[mtgox BTC/USD] PRICE #{updown} #{percentage_difference}% in #{interval}: $#{new_price} now vs. $#{@@old}"
+      
+      return if percentage_difference < 3 and percentage_difference > -3 # Don't save if no significant change
+      
+      @@time = new_time
+      @@old = new_price
+    end
+  end
+end

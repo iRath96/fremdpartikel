@@ -1,0 +1,133 @@
+require 'socket'
+require 'pty'
+
+# $eval
+module ::LinkBridge
+  class Word
+    attr_accessor :s, :links
+    def initialize(s); @s = s; @links = []; end
+    def to_s; @s.gsub(/\..*$/, ''); end
+    def add_link(l); @links.push l; end
+    def is_left_wall?; @s == "LEFT-WALL"; end
+    def has_link?(reg); @links.any? { |l| l.label.match reg }; end
+    def find_link(reg); @links.find { |l| l.label.match reg }; end
+    def find_links(reg); @links.find_all { |l| l.label.match reg }; end
+  end
+  
+  class Link
+    attr_accessor :l, :r, :label
+    def initialize(l,r,label)
+      @l, @r, @label = l,r,label
+      @l.add_link self
+      @r.add_link self
+    end
+  end
+  
+  class Parser
+    @@ship = PTY.spawn '/Users/alex/Downloads/link-4.1b/example', :chdir => '/Users/alex/Downloads/link-4.1b/'
+    @@ship[0].gets("knowledge\r\n")
+    
+    def self.parse(sentence)
+      @@ship[1].puts sentence
+      a = @@ship[0].gets("$\r\n").split("\r\n")
+      return nil if a.length < 4
+      
+      sentence, words, links = a
+      words = words.split(", ").map { |s| Word.new s }
+      links = links.split(", ").map { |s| l,r,label = s.split(':'); Link.new words[l.to_i], words[r.to_i], label }
+      return [ words, links ]
+    end
+  end
+end
+
+module ARIPlugin
+  class Plugin < PluginBase
+    init_v2 :ari
+    
+    meta :name => "ARI Plugin",
+         :author => "Alexander Rath",
+         :version => 0.1,
+         :description => "Uses ARI as resource for AI."
+    
+    cmd :arec, "Reconnect"
+    cmd :brec, "Reconnect"
+    
+    hide :arec
+    hide :brec
+    
+    cmd :sink, "Sink the ship, yar har."
+    @@ship = PTY.spawn '/Users/alex/Downloads/link-4.1b/example', :chdir => '/Users/alex/Downloads/link-4.1b/'
+    @@ship[0].gets("knowledge\r\n")
+    
+    #@@socket = TCPSocket.new 'localhost', 9419
+    #@@proc = open('|/Users/alex/Library/Developer/Xcode/DerivedData/ARICA-fsttcmxmtjynfmgyktunleakxgqe/Build/Products/Debug/ARICA', 'w+')
+    
+    def self.cmd_sink(msg, data)
+      @@ship[1].puts data
+      msg.chat.push "$<sink>  :-\n" + @@ship[0].gets("$\r\n")
+    end
+    
+    def self.init
+      @@proc = open('|/Users/alex/Library/Developer/Xcode/DerivedData/ARICA-fsttcmxmtjynfmgyktunleakxgqe/Build/Products/Debug/ARICA', 'w+')
+      @@proc.gets("\n\n")
+      return @@proc.gets("\n\n")
+    end
+    
+    def self.cmd_arec(msg, data)
+      return unless msg.from_handle == "irath96"
+      begin; @@socket.close; rescue => e; end
+      @@socket = TCPSocket.new 'localhost', 9419
+    end
+    
+    def self.cmd_brec(msg, data)
+      return unless msg.from_handle == "irath96"
+      begin; @@proc.close; rescue => e; end
+      @@proc = open('|/Users/alex/Library/Developer/Xcode/DerivedData/ARICA-fsttcmxmtjynfmgyktunleakxgqe/Build/Products/Debug/ARICA', 'w+')
+      
+      @@proc.gets("\n\n")
+      notify @@proc.gets("\n\n")
+    end
+    
+    hook:msg do |msg|
+      #msg.get_cached(:body, :chatname, :sender_handle) do |body, cname, handle|
+        body = msg.body
+        next if body[0] == ?$
+        
+        do_anyway = (rand(10) == 0 and body.rstrip.match(/([?]+[!]*[?]*)$/))
+        did_anyway = false
+        
+        if body[0..1] == ',,'
+          #puts cname.inspect
+          #sleep 1
+          
+          @@socket.send body[2..-1] + "\x00", 0
+          
+          msgs = @@socket.gets("\x00")[0...-1].split "\n"
+          msgs.each do |m|
+            msg.chat.push ',' + m
+            sleep 0.4
+          end
+        elsif body[0..1] == '@@' # Be really verbose!
+          @@proc.puts body
+          msg.chat.push @@proc.gets("\n\n")[0...-2]
+        elsif ((body[0..1] == '__' or body[0..1] == '++' or body[0..1] == '--') and body = body[2..-1]) or (do_anyway and did_anyway = true)
+          @@proc.puts body
+          
+          resp = JSON.parse @@proc.gets("\n\n")[0...-2]
+          
+          if msg.body[0..1] == '--'
+            msg.body = resp['match'][0]
+          end
+          
+          msg.chat.push resp.inspect if msg.body[0..1] == '++'
+          resp['output'][0].split("\n").each do |m|
+            msg.chat.push (did_anyway ? '... ' : msg.body[0..1]) + m
+            sleep 0.1
+          end
+        end
+      end
+    #end
+  end
+  
+  Thread.new { ARIPlugin::Plugin.init }
+end
